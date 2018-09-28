@@ -19,6 +19,7 @@ all: generate build images
 depend:
 	dep version || go get -u github.com/golang/dep/cmd/dep
 	dep ensure
+	./hack/update-bazel.sh
 
 depend-update:
 	dep ensure -update
@@ -38,9 +39,7 @@ genmocks: depend
 	hack/generate-mocks.sh "sigs.k8s.io/cluster-api/pkg/client/clientset_generated/clientset/typed/cluster/v1alpha1 ClusterInterface" "cloud/aws/actuators/cluster/mock_clusteriface/mock.go"
 
 build: depend
-	CGO_ENABLED=0 go install -a -ldflags '-extldflags "-static"' sigs.k8s.io/cluster-api-provider-aws/cmd/cluster-controller
-	CGO_ENABLED=0 go install -a -ldflags '-extldflags "-static"' sigs.k8s.io/cluster-api-provider-aws/cmd/machine-controller
-	CGO_ENABLED=0 go install -a -ldflags '-extldflags "-static"' sigs.k8s.io/cluster-api-provider-aws/clusterctl
+	bazel build //cmd/cluster-controller:cluster-controller //cmd/machine-controller:machine-controller //clusterctl:clusterctl
 
 images: depend
 	$(MAKE) -C cmd/cluster-controller image
