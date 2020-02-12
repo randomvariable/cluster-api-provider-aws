@@ -257,10 +257,33 @@ func bootstrapSecretPolicy() iam.StatementEntry {
 	}
 }
 
+func ssmAgentPolicy() iam.StatementEntry {
+	return iam.StatementEntry{
+		Effect:   iam.EffectAllow,
+		Resource: iam.Resources{"*"},
+		Action: iam.Actions{
+			"ssmmessages:CreateControlChannel",
+			"ssmmessages:CreateDataChannel",
+			"ssmmessages:OpenControlChannel",
+			"ssmmessages:OpenDataChannel",
+			"ec2messages:AcknowledgeMessage",
+			"ec2messages:DeleteMessage",
+			"ec2messages:FailMessage",
+			"ec2messages:GetEndpoint",
+			"ec2messages:GetMessages",
+			"ec2messages:SendReply",
+			"ssm:UpdateInstanceInformation",
+			"ssm:ListInstanceAssociations",
+		},
+	}
+}
+
 func nodePolicy() *iam.PolicyDocument {
 	policyDocument := cloudProviderNodeAwsPolicy()
 	policyDocument.Statement = append(
-		policyDocument.Statement, bootstrapSecretPolicy(),
+		policyDocument.Statement,
+		bootstrapSecretPolicy(),
+		ssmAgentPolicy(),
 	)
 	return policyDocument
 }
