@@ -63,7 +63,7 @@ func NewManagedMachinePoolScope(params ManagedMachinePoolScopeParams) (*ManagedM
 		params.Logger = klogr.New()
 	}
 
-	session, err := sessionForRegion(params.ControlPlane.Spec.Region, params.Endpoints)
+	session, err := sessionForClusterWithRegion(params.Client, params.AWSCluster, params.ControlPlane.Spec.Region, params.Logger, params.Endpoints)
 	if err != nil {
 		return nil, errors.Errorf("failed to create aws session: %v", err)
 	}
