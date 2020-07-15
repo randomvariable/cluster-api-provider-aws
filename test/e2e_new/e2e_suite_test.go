@@ -145,13 +145,17 @@ func TestE2E(t *testing.T) {
 }
 
 var _ = SynchronizedBeforeSuite(func() []byte {
+	flag.Parse()
 	Expect(configPath).To(BeAnExistingFile(), "Invalid test suite argument. configPath should be an existing file.")
 	Expect(os.MkdirAll(artifactFolder, 0o750)).To(Succeed(), "Invalid test suite argument. Can't create artifacts-folder %q", artifactFolder)
-
 	Byf("Loading the e2e test configuration from %q", configPath)
 	e2eConfig = loadE2EConfig(configPath)
-
+	Expect(prepConformanceConfig(artifactFolder, e2eConfig)).To(Succeed())
 	awsSession = newAWSSession()
+	if err := dumpServiceQuotas(context.TODO(), artifactFolder); err != nil {
+		// Non-lethal error
+		fmt.Fprintf(GinkgoWriter, "Error dumping service quotas: err=%s\n", err)
+	}
 	createCloudFormationStack(awsSession, getBootstrapTemplate())
 	ensureNoServiceLinkedRoles(awsSession)
 	ensureSSHKeyPair(awsSession, defaultSSHKeyPairName)

@@ -89,7 +89,6 @@ providers:
     files:
       # Add a cluster template
       - sourcePath: "../../../templates/cluster-template.yaml"
-      - sourcePath: "../../../_artifacts/templates/cluster-template-conformance-ci-artifacts.yaml"
 
 variables:
   KUBERNETES_VERSION: "v1.18.2"
