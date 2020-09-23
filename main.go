@@ -17,12 +17,16 @@ limitations under the License.
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
+	"github.com/aws/aws-sdk-go/aws/endpoints"
 	"math/rand"
 	"net/http"
 	_ "net/http/pprof"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -39,6 +43,7 @@ import (
 	infrav1alpha3exp "sigs.k8s.io/cluster-api-provider-aws/exp/api/v1alpha3"
 	controllersexp "sigs.k8s.io/cluster-api-provider-aws/exp/controllers"
 	"sigs.k8s.io/cluster-api-provider-aws/feature"
+	"sigs.k8s.io/cluster-api-provider-aws/pkg/cloud/scope"
 	"sigs.k8s.io/cluster-api-provider-aws/pkg/record"
 	"sigs.k8s.io/cluster-api-provider-aws/version"
 
@@ -50,8 +55,12 @@ import (
 )
 
 var (
-	scheme   = runtime.NewScheme()
-	setupLog = ctrl.Log.WithName("setup")
+	scheme                          = runtime.NewScheme()
+	setupLog                        = ctrl.Log.WithName("setup")
+	errServiceEndpointFormat        = errors.New("must be formatted as SigningRegion:ServiceID=URL")
+	errServiceEndpointSigningRegion = errors.New("must be formatted as SigningRegion:ServiceID")
+	errServiceEndpointURL           = errors.New("must use a valid URL as a service-endpoint")
+	errServiceEndpointServiceID     = errors.New("must use a valid serviceID from the AWS GO SDK")
 )
 
 func init() {
@@ -75,7 +84,58 @@ var (
 	syncPeriod              time.Duration
 	webhookPort             int
 	healthAddr              string
+	serviceEndpoints        []string
 )
+
+func endpointTuple(serviceEndpoints []string) ([]scope.ServiceEndpoint, error) {
+	var serviceIDs []string
+	resolver := endpoints.DefaultResolver()
+	partitions := resolver.(endpoints.EnumPartitions).Partitions()
+	for _, p := range partitions {
+		for id := range p.Services() {
+			var add bool = true
+			for _, s := range serviceIDs {
+				if id == s {
+					add = false
+				}
+			}
+			if add {
+				serviceIDs = append(serviceIDs, id)
+			}
+		}
+	}
+	ret := make([]scope.ServiceEndpoint, 0, len(serviceEndpoints))
+	for _, pair := range serviceEndpoints {
+		kv := strings.Split(pair, "=")
+		if len(kv) != 2 {
+			return nil, errServiceEndpointFormat
+		}
+		signingRegionPair := strings.Split(kv[0], ":")
+		if len(signingRegionPair) != 2 {
+			return nil, errServiceEndpointSigningRegion
+		}
+		var serviceID string = ""
+		for _, id := range serviceIDs {
+			if signingRegionPair[1] == id {
+				serviceID = signingRegionPair[1]
+				break
+			}
+		}
+		if serviceID == "" {
+			return nil, errServiceEndpointServiceID
+		}
+		URL, err := url.ParseRequestURI(kv[1])
+		if err != nil {
+			return nil, errServiceEndpointURL
+		}
+		ret = append(ret, scope.ServiceEndpoint{
+			ServiceID:     serviceID,
+			URL:           URL.String(),
+			SigningRegion: signingRegionPair[0],
+		})
+	}
+	return ret, nil
+}
 
 func main() {
 	klog.InitFlags(nil)
@@ -126,19 +186,28 @@ func main() {
 
 	setupLog.V(1).Info(fmt.Sprintf("%+v\n", feature.Gates))
 
+	// Parse service endpoints.
+	AWSServiceEndpoints, err := endpointTuple(serviceEndpoints)
+	if err != nil {
+		setupLog.Error(err, "unable to parse service endpoints", "controller", "AWSCluster")
+		os.Exit(1)
+	}
+
 	if webhookPort == 0 {
 		if err = (&controllers.AWSMachineReconciler{
-			Client:   mgr.GetClient(),
-			Log:      ctrl.Log.WithName("controllers").WithName("AWSMachine"),
-			Recorder: mgr.GetEventRecorderFor("awsmachine-controller"),
+			Client:    mgr.GetClient(),
+			Log:       ctrl.Log.WithName("controllers").WithName("AWSMachine"),
+			Recorder:  mgr.GetEventRecorderFor("awsmachine-controller"),
+			Endpoints: AWSServiceEndpoints,
 		}).SetupWithManager(mgr, controller.Options{MaxConcurrentReconciles: awsMachineConcurrency}); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "AWSMachine")
 			os.Exit(1)
 		}
 		if err = (&controllers.AWSClusterReconciler{
-			Client:   mgr.GetClient(),
-			Log:      ctrl.Log.WithName("controllers").WithName("AWSCluster"),
-			Recorder: mgr.GetEventRecorderFor("awscluster-controller"),
+			Client:    mgr.GetClient(),
+			Log:       ctrl.Log.WithName("controllers").WithName("AWSCluster"),
+			Recorder:  mgr.GetEventRecorderFor("awscluster-controller"),
+			Endpoints: AWSServiceEndpoints,
 		}).SetupWithManager(mgr, controller.Options{MaxConcurrentReconciles: awsClusterConcurrency}); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "AWSCluster")
 			os.Exit(1)
@@ -266,6 +335,12 @@ func initFlags(fs *pflag.FlagSet) {
 		"health-addr",
 		":9440",
 		"The address the health endpoint binds to.",
+	)
+
+	fs.StringSliceVar(&serviceEndpoints,
+		"service-endpoints",
+		[]string{},
+		"Tuple of an AWS Service Endpoint Configuration in comma separated format: ${SigningRegion}:${ServiceID}=${URL},${SigningRegion}:${ServiceID}=${URL}",
 	)
 
 	feature.MutableGates.AddFlag(fs)
