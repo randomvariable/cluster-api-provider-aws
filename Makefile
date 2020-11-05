@@ -62,20 +62,33 @@ export PATH
 REGISTRY ?= gcr.io/$(shell gcloud config get-value project)
 STAGING_REGISTRY := gcr.io/k8s-staging-cluster-api-aws
 PROD_REGISTRY := us.gcr.io/k8s-artifacts-prod/cluster-api-aws
-IMAGE_NAME ?= cluster-api-aws-controller
-CONTROLLER_IMG ?= $(REGISTRY)/$(IMAGE_NAME)
 TAG ?= dev
 ARCH ?= amd64
 ALL_ARCH = amd64 arm arm64 ppc64le s390x
 
+# main controller
+CORE_IMAGE_NAME ?= cluster-api-aws-controller
+CORE_CONTROLLER_IMG ?= $(REGISTRY)/$(CORE_IMAGE_NAME)
+CORE_CONTROLLER_ORIGINAL_IMG := gcr.io/k8s-staging-cluster-api-aws/cluster-api-aws-controller
+CORE_CONTROLLER_NAME := capa-controller-manager
+CORE_MANIFEST_FILE := infrastructure-components
+CORE_CONFIG_DIR := config
+
 # bootstrap
 EKS_BOOTSTRAP_IMAGE_NAME ?= eks-bootstrap-controller
 EKS_BOOTSTRAP_CONTROLLER_IMG ?= $(REGISTRY)/$(EKS_BOOTSTRAP_IMAGE_NAME)
+EKS_BOOTSTRAP_CONTROLLER_ORIGINAL_IMG := gcr.io/k8s-staging-cluster-api-aws/eks-bootstrap-controller
+EKS_BOOTSTRAP_CONTROLLER_NAME := capa-eks-bootstrap-controller-manager
+EKS_BOOTSTRAP_MANIFEST_FILE := eks-bootstrap-components
+EKS_BOOTSTRAP_CONFIG_DIR := bootstrap/eks/config
 
 # bootstrap
 EKS_CONTROLPLANE_IMAGE_NAME ?= eks-controlplane-controller
 EKS_CONTROLPLANE_CONTROLLER_IMG ?= $(REGISTRY)/$(EKS_CONTROLPLANE_IMAGE_NAME)
-
+EKS_CONTROLPLANE_CONTROLLER_ORIGINAL_IMG := gcr.io/k8s-staging-cluster-api-aws/eks-controlplane-controller
+EKS_CONTROLPLANE_CONTROLLER_NAME := capa-eks-control-plane-controller-manager
+EKS_CONTROLPLANE_MANIFEST_FILE := eks-controlplane-components
+EKS_CONTROLPLANE_CONFIG_DIR := controlplane/eks/config
 
 # Allow overriding manifest generation destination directory
 MANIFEST_ROOT ?= config
@@ -280,8 +293,8 @@ docker-build:
 
 .PHONY: docker-build-core
 docker-build-core: ## Build the docker image for controller-manager
-	docker build --pull --build-arg ARCH=$(ARCH) --build-arg LDFLAGS="$(LDFLAGS)" . -t $(CONTROLLER_IMG)-$(ARCH):$(TAG)
-	$(MAKE) set-manifest-image MANIFEST_IMG=$(CONTROLLER_IMG)-$(ARCH) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="./config/manager/manager_image_patch.yaml"
+	docker build --pull --build-arg ARCH=$(ARCH) --build-arg LDFLAGS="$(LDFLAGS)" . -t $(CORE_CONTROLLER_IMG)-$(ARCH):$(TAG)
+	$(MAKE) set-manifest-image MANIFEST_IMG=$(CORE_CONTROLLER_IMG)-$(ARCH) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="./config/manager/manager_image_patch.yaml"
 	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="./config/manager/manager_pull_policy.yaml"
 
 .PHONY: docker-build-eks-bootstrap
@@ -300,7 +313,7 @@ docker-build-eks-controlplane:
 
 .PHONY: docker-push
 docker-push: ## Push the docker image
-	docker push $(CONTROLLER_IMG)-$(ARCH):$(TAG)
+	docker push $(CORE_CONTROLLER_IMG)-$(ARCH):$(TAG)
 	docker push $(EKS_BOOTSTRAP_CONTROLLER_IMG)-$(ARCH):$(TAG)
 	docker push $(EKS_CONTROLPLANE_CONTROLLER_IMG)-$(ARCH):$(TAG)
 
@@ -326,10 +339,10 @@ docker-push-%:
 .PHONY: docker-push-core-manifest
 docker-push-core-manifest: ## Push the fat manifest docker image.
 	## Minimum docker version 18.06.0 is required for creating and pushing manifest images.
-	docker manifest create --amend $(CONTROLLER_IMG):$(TAG) $(shell echo $(ALL_ARCH) | sed -e "s~[^ ]*~$(CONTROLLER_IMG)\-&:$(TAG)~g")
-	@for arch in $(ALL_ARCH); do docker manifest annotate --arch $${arch} ${CONTROLLER_IMG}:${TAG} ${CONTROLLER_IMG}-$${arch}:${TAG}; done
-	docker manifest push --purge ${CONTROLLER_IMG}:${TAG}
-	$(MAKE) set-manifest-image MANIFEST_IMG=$(CONTROLLER_IMG)-$(ARCH) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="./config/manager/manager_image_patch.yaml"
+	docker manifest create --amend $(CORE_CONTROLLER_IMG):$(TAG) $(shell echo $(ALL_ARCH) | sed -e "s~[^ ]*~$(CORE_CONTROLLER_IMG)\-&:$(TAG)~g")
+	@for arch in $(ALL_ARCH); do docker manifest annotate --arch $${arch} ${CORE_CONTROLLER_IMG}:${TAG} ${CORE_CONTROLLER_IMG}-$${arch}:${TAG}; done
+	docker manifest push --purge ${CORE_CONTROLLER_IMG}:${TAG}
+	$(MAKE) set-manifest-image MANIFEST_IMG=$(CORE_CONTROLLER_IMG)-$(ARCH) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="./config/manager/manager_image_patch.yaml"
 	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="./config/manager/manager_pull_policy.yaml"
 
 .PHONY: docker-push-eks-bootstrap-manifest
@@ -350,15 +363,7 @@ docker-push-eks-controlplane-manifest: ## Push the fat manifest docker image.
 	$(MAKE) set-manifest-image MANIFEST_IMG=$(EKS_CONTROLPLANE_CONTROLLER_IMG)-$(ARCH) MANIFEST_TAG=$(TAG) TARGET_RESOURCE="./controlplane/eks/config/manager/manager_image_patch.yaml"
 	$(MAKE) set-manifest-pull-policy TARGET_RESOURCE="./controlplane/eks/config/manager/manager_pull_policy.yaml"
 
-.PHONY: set-manifest-image
-set-manifest-image:
-	$(info Updating kustomize image patch file for manager resource)
-	sed -i'' -e 's@image: .*@image: '"${MANIFEST_IMG}:$(MANIFEST_TAG)"'@' $(TARGET_RESOURCE)
 
-.PHONY: set-manifest-pull-policy
-set-manifest-pull-policy:
-	$(info Updating kustomize pull policy file for manager resources)
-	sed -i'' -e 's@imagePullPolicy: .*@imagePullPolicy: '"$(PULL_POLICY)"'@' $(TARGET_RESOURCE)
 
 ## --------------------------------------
 ## Release
@@ -370,38 +375,25 @@ RELEASE_DIR := out
 $(RELEASE_DIR):
 	mkdir -p $@
 
-.PHONY: release
-release: clean-release  ## Builds and push container images using the latest git tag for the commit.
+.PHONY: check-release-tag
+check-release-tag:
 	@if [ -z "${RELEASE_TAG}" ]; then echo "RELEASE_TAG is not set"; exit 1; fi
 	@if ! [ -z "$$(git status --porcelain)" ]; then echo "Your local git repository contains uncommitted changes, use git clean before proceeding."; exit 1; fi
+
+.PHONY: release
+release: clean-release check-release-tag  ## Builds and push container images using the latest git tag for the commit.
 	git checkout "${RELEASE_TAG}"
 	# Build binaries prior to marking the git tree as dirty
 	$(MAKE) release-binaries
-	# Set the manifest image to the production bucket.
-	$(MAKE) set-manifest-image \
-		MANIFEST_IMG=$(PROD_REGISTRY)/$(IMAGE_NAME) MANIFEST_TAG=$(RELEASE_TAG) \
-		TARGET_RESOURCE="./config/manager/manager_image_patch.yaml"
-	# Set manifest image for EKS bootstrap provider to the production bucket.
-	$(MAKE) set-manifest-image \
-		MANIFEST_IMG=$(PROD_REGISTRY)/$(EKS_BOOTSTRAP_IMAGE_NAME) MANIFEST_TAG=$(RELEASE_TAG) \
-		TARGET_RESOURCE="./bootstrap/eks/config/manager/manager_image_patch.yaml"
-	# Set manifest image for EKS controlplane provider to the production bucket.
-	$(MAKE) set-manifest-image \
-		MANIFEST_IMG=$(PROD_REGISTRY)/$(EKS_CONTROLPLANE_IMAGE_NAME) MANIFEST_TAG=$(RELEASE_TAG) \
-		TARGET_RESOURCE="./controlplane/eks/config/manager/manager_image_patch.yaml"
-	$(MAKE) set-manifest-pull-policy PULL_POLICY=IfNotPresent TARGET_RESOURCE="./config/manager/manager_pull_policy.yaml"
-	$(MAKE) set-manifest-pull-policy PULL_POLICY=IfNotPresent TARGET_RESOURCE="./bootstrap/eks/config/manager/manager_pull_policy.yaml"
-	$(MAKE) set-manifest-pull-policy PULL_POLICY=IfNotPresent TARGET_RESOURCE="./controlplane/eks/config/manager/manager_pull_policy.yaml"
 	$(MAKE) release-manifests
 	$(MAKE) release-templates
 	# Add metadata to the release artifacts
 	cp metadata.yaml $(RELEASE_DIR)/metadata.yaml
 
-.PHONY: release-manifests
-release-manifests: $(RELEASE_DIR) $(KUSTOMIZE) ## Builds the manifests to publish with a release
-	$(KUSTOMIZE) build config > $(RELEASE_DIR)/infrastructure-components.yaml
-	$(KUSTOMIZE) build bootstrap/eks/config > $(RELEASE_DIR)/eks-bootstrap-components.yaml
-	$(KUSTOMIZE) build controlplane/eks/config > $(RELEASE_DIR)/eks-controlplane-components.yaml
+.PHONY: release-manifests check-release-tag
+	$(MAKE) $(RELEASE_DIR)/$(CORE_MANIFEST_FILE).yaml TAG=$(RELEASE_TAG) PULL_POLICY=IfNotPresent
+	$(MAKE) $(RELEASE_DIR)/$(EKS_BOOTSTRAP_MANIFEST_FILE).yaml TAG=$(RELEASE_TAG) PULL_POLICY=IfNotPresent
+	$(MAKE) $(RELEASE_DIR)/$(EKS_CONTROLPLANE_MANIFEST_FILE).yaml  TAG=$(RELEASE_TAG) PULL_POLICY=IfNotPresent
 
 .PHONY: release-binaries
 release-binaries: ## Builds the binaries to publish with a release
@@ -429,7 +421,7 @@ RELEASE_ALIAS_TAG=$(PULL_BASE_REF)
 
 .PHONY: release-alias-tag
 release-alias-tag: # Adds the tag to the last build tag.
-	gcloud container images add-tag $(CONTROLLER_IMG):$(TAG) $(CONTROLLER_IMG):$(RELEASE_ALIAS_TAG)
+	gcloud container images add-tag $(CORE_CONTROLLER_IMG):$(TAG) $(CORE_CONTROLLER_IMG):$(RELEASE_ALIAS_TAG)
 	gcloud container images add-tag $(EKS_BOOTSTRAP_CONTROLLER_IMG):$(TAG) $(EKS_BOOTSTRAP_CONTROLLER_IMG):$(RELEASE_ALIAS_TAG)
 	gcloud container images add-tag $(EKS_CONTROLPLANE_CONTROLLER_IMG):$(TAG) $(EKS_CONTROLPLANE_CONTROLLER_IMG):$(RELEASE_ALIAS_TAG)
 
@@ -500,3 +492,48 @@ verify-gen: generate
 .PHONY: compile-e2e
 compile-e2e: ## Test e2e compilation
 	go test -c -o /dev/null -tags=e2e ./test/e2e
+
+IMAGE_PATCH_DIR := $(ARTIFACTS)/image-patch
+
+$(IMAGE_PATCH_DIR): $(ARTIFACTS)
+	mkdir -p $@
+
+$(IMAGE_PATCH_DIR)/$(PROVIDER): $(ARTIFACTS)/image-patch
+	mkdir -p $@
+
+$(IMAGE_PATCH_DIR)/$(CORE_MANIFEST_FILE)/source-manifest.yaml:
+	$(MAKE) image-patch-source-manifest PROVIDER=$(CORE_MANIFEST_FILE) PROVIDER_CONFIG_DIR=$(CORE_CONFIG_DIR)
+
+$(IMAGE_PATCH_DIR)/$(EKS_BOOTSTRAP_MANIFEST_FILE)/source-manifest.yaml:
+	$(MAKE) image-patch-source-manifest PROVIDER="$(EKS_BOOTSTRAP_MANIFEST_FILE)" PROVIDER_CONFIG_DIR=$(EKS_BOOTSTRAP_CONFIG_DIR)
+
+$(IMAGE_PATCH_DIR)/$(EKS_CONTROLPLANE_MANIFEST_FILE)/source-manifest.yaml:
+	$(MAKE) image-patch-source-manifest PROVIDER="$(EKS_CONTROLPLANE_MANIFEST_FILE)" PROVIDER_CONFIG_DIR=$(EKS_CONTROLPLANE_CONFIG_DIR)
+
+$(RELEASE_DIR)/$(CORE_MANIFEST_FILE).yaml:
+	$(MAKE) compiled-manifest PROVIDER=$(CORE_MANIFEST_FILE) OLD_IMG=$(CORE_CONTROLLER_ORIGINAL_IMG) MANIFEST_IMG=$(CORE_CONTROLLER_IMG) MANIFEST_TAG=$(TAG) CONTROLLER_NAME=$(CORE_CONTROLLER_NAME) NAMESPACE="capa-system"
+
+$(RELEASE_DIR)/$(EKS_BOOTSTRAP_MANIFEST_FILE).yaml: $(IMAGE_PATCH_DIR)/$(EKS_BOOTSTRAP_MANIFEST_FILE)/source-manifest.yaml
+	$(MAKE) compiled-manifest PROVIDER=$(EKS_BOOTSTRAP_MANIFEST_FILE) OLD_IMG=$(EKS_BOOTSTRAP_CONTROLLER_ORIGINAL_IMG) MANIFEST_IMG=$(EKS_BOOTSTRAP_CONTROLLER_IMG) MANIFEST_TAG=$(TAG) CONTROLLER_NAME=$(EKS_BOOTSTRAP_CONTROLLER_NAME)
+
+$(RELEASE_DIR)/$(EKS_CONTROLPLANE_MANIFEST_FILE).yaml: $(IMAGE_PATCH_DIR)/$(EKS_CONTROLPLANE_MANIFEST_FILE)/source-manifest.yaml
+	$(MAKE) compiled-manifest PROVIDER=$(EKS_CONTROLPLANE_MANIFEST_FILE) OLD_IMG=$(EKS_CONTROLPLANE_CONTROLLER_ORIGINAL_IMG) MANIFEST_IMG=$(EKS_CONTROLPLANE_CONTROLLER_IMG) MANIFEST_TAG=$(TAG) CONTROLLER_NAME=$(EKS_CONTROLPLANE_CONTROLLER_NAME)
+
+.PHONY: compiled-manifest
+compiled-manifest: $(RELEASE_DIR) $(IMAGE_PATCH_DIR)/$(PROVIDER)/source-manifest.yaml
+	$(MAKE) image-patch-kustomization
+	$(MAKE) image-pull-policy
+	$(KUSTOMIZE) build $(IMAGE_PATCH_DIR)/$(PROVIDER) > $(RELEASE_DIR)/$(PROVIDER).yaml
+
+.PHONY: image-patch-source-manifest
+image-patch-source-manifest: $(IMAGE_PATCH_DIR)/$(PROVIDER)
+	$(KUSTOMIZE) build $(PROVIDER_CONFIG_DIR) > $(IMAGE_PATCH_DIR)/$(PROVIDER)/source-manifest.yaml
+
+.PHONY: image-patch-kustomization
+image-patch-kustomization: $(IMAGE_PATCH_DIR)/$(PROVIDER)
+	jq '.images[0]={"name":"$(OLD_IMG)","newName":"$(MANIFEST_IMG)","newTag":"$(MANIFEST_TAG)"}|.patchesJson6902[0].target.name="$(CONTROLLER_NAME)"|.patchesJson6902[0].target.namespace="$(NAMESPACE)"|.patchesJson6902[1].target.name="$(CONTROLLER_NAME)"' \
+		"hack/image-patch/kustomization.yaml" > $(IMAGE_PATCH_DIR)/$(PROVIDER)/kustomization.yaml
+
+.PHONY: image-pull-policy
+image-pull-policy: $(IMAGE_PATCH_DIR)/$(PROVIDER)
+	jq '.[0].Value="$(PULL_POLICY)"' "hack/image-patch/pull-policy-patch.yaml" > $(IMAGE_PATCH_DIR)/$(PROVIDER)/pull-policy-patch.yaml

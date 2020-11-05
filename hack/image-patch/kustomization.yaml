@@ -1,0 +1,36 @@
+{
+  "apiVersion": "kustomize.config.k8s.io/v1beta1",
+  "kind": "Kustomization",
+  "resources": [
+    "source-manifest.yaml"
+  ],
+  "images": [
+    {
+      "name": "",
+      "newName": "",
+      "newTag": ""
+    }
+  ],
+  "patchesJson6902": [
+    {
+      "target": {
+          "version": "v1",
+          "group": "apps",
+          "kind": "Deployment",
+          "name": "controller-name",
+          "namespace": "namespace"
+      },
+      "path": "pull-policy-patch.yaml"
+    },
+    {
+      "target": {
+          "version": "v1",
+          "group": "apps",
+          "kind": "Deployment",
+          "name": "controller-name",
+          "namespace": "capi-webhook-system"
+      },
+      "path": "pull-policy-patch.yaml"
+    }
+  ]
+}
