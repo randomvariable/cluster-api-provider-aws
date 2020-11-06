@@ -34,6 +34,11 @@ endif
 
 ifeq ($(OS), darwin)
 	RUST_TARGET := apple-darwin
+	GH_ARCH_SUFFIX := macOS_amd64
+endif
+
+ifeq ($(OS), linux)
+	GH_ARCH_SUFFIX := linux_amd64
 endif
 
 ## --------------------------------------
@@ -62,9 +67,27 @@ ENVSUBST := $(BIN_DIR)/envsubst
 $(ENVSUBST): $(BIN_DIR) go.mod go.sum # Build envsubst from tools folder.
 	go build -tags=tools -o $@ github.com/a8m/envsubst/cmd/envsubst
 
+GH_SHARE := $(SHARE_DIR)/gh
+
+$(GH_SHARE): $(SHARE_DIR)
+	mkdir -p $@
+
+$(GH_SHARE)/gh.tar.gz: $(GH_SHARE)
+	curl -L "https://github.com/cli/cli/releases/download/v$(GH_VERSION)/gh_$(GH_VERSION)_$(GH_ARCH_SUFFIX).tar.gz" -o $@
+
+GH := $(BIN_DIR)/gh
+$(GH): $(GH_SHARE)/gh.tar.gz
+	tar -xvf share/gh/gh.tar.gz gh_$(GH_VERSION)_$(GH_ARCH_SUFFIX)/bin/gh --strip-components 1 --directory $(BIN_DIR)
+	chmod +x $@
+	touch -m $@
+
 GINKGO := $(BIN_DIR)/ginkgo
 $(GINKGO): $(BIN_DIR) go.mod go.sum
 	go build -tags=tools -o $@ github.com/onsi/ginkgo/ginkgo
+
+GOJQ := $(BIN_DIR)/gojq
+$(GOJQ): $(BIN_DIR) go.mod go.sum
+	go build -tags=tools -o $@ github.com/itchyny/gojq/cmd/gojq
 
 GOLANGCI_LINT := $(BIN_DIR)/golangci-lint
 $(GOLANGCI_LINT): $(BIN_DIR) go.mod go.sum # Build golangci-lint from tools folder.
