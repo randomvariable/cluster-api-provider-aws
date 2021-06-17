@@ -7,6 +7,12 @@ on:
   push:
     branches:
       - dependa/**
+  workflow_dispatch:
+      inputs:
+        name:
+          description: 'Manual generate'
+          required: true
+          default: 'Make Generate'
 jobs:
   build:
     name: Build
