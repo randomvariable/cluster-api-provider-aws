@@ -2,8 +2,11 @@ name: dependabot
 
 on:
   pull_request:
-    branches: [ dependa/** ]
-
+    branches:
+      - dependa/**
+  push:
+    branches:
+      - dependa/**
 jobs:
   build:
     name: Build
