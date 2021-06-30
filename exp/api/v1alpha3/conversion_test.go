@@ -21,10 +21,31 @@ import (
 
 	. "github.com/onsi/gomega"
 
+	"github.com/aws/aws-sdk-go/aws"
+	fuzz "github.com/google/gofuzz"
+	"k8s.io/apimachinery/pkg/api/apitesting/fuzzer"
 	runtime "k8s.io/apimachinery/pkg/runtime"
+	runtimeserializer "k8s.io/apimachinery/pkg/runtime/serializer"
+	v1infra4 "sigs.k8s.io/cluster-api-provider-aws/api/v1alpha4"
 	v1alpha4 "sigs.k8s.io/cluster-api-provider-aws/exp/api/v1alpha4"
 	utilconversion "sigs.k8s.io/cluster-api/util/conversion"
 )
+
+func fuzzFuncs(_ runtimeserializer.CodecFactory) []interface{} {
+	return []interface{}{
+		AWSMachinePoolFuzzer,
+	}
+}
+
+func AWSMachinePoolFuzzer(obj *v1alpha4.AWSMachinePool, c fuzz.Continue) {
+	c.FuzzNoCustom(obj)
+
+	if obj.Spec.AWSLaunchTemplate.RootVolume == nil {
+		obj.Spec.AWSLaunchTemplate.RootVolume = &v1infra4.Volume{}
+	}
+
+	obj.Spec.AWSLaunchTemplate.RootVolume.Encrypted = aws.Bool(false)
+}
 
 func TestFuzzyConversion(t *testing.T) {
 	g := NewWithT(t)
@@ -36,6 +57,7 @@ func TestFuzzyConversion(t *testing.T) {
 		Scheme: scheme,
 		Hub:    &v1alpha4.AWSMachinePool{},
 		Spoke:  &AWSMachinePool{},
+		FuzzerFuncs: []fuzzer.FuzzerFuncs{fuzzFuncs},
 	}))
 
 	t.Run("for AWSManagedMachinePool", utilconversion.FuzzTestFunc(utilconversion.FuzzTestFuncInput{

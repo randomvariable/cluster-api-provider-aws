@@ -1144,6 +1144,7 @@ spec:
                           description: Device name
                           type: string
                         encrypted:
+                          default: true
                           description: Encrypted is whether the volume should be encrypted
                             or not.
                           type: boolean
@@ -1188,6 +1189,7 @@ spec:
                         description: Device name
                         type: string
                       encrypted:
+                        default: true
                         description: Encrypted is whether the volume should be encrypted
                           or not.
                         type: boolean
